@@ -115,6 +115,21 @@
         background-color: rgba(0, 255, 136, 0.1);
       }
       
+      .nav-link.admin {
+        background: linear-gradient(135deg, #ff4757, #ff6b7a);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: var(--radius);
+        font-weight: 600;
+      }
+      
+      .nav-link.admin:hover {
+        background: linear-gradient(135deg, #ff3742, #ff5a6d);
+        color: white;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(255, 71, 87, 0.3);
+      }
+      
       .navbar-toggle {
         display: none;
         background: none;
@@ -411,9 +426,19 @@
         </button>
         <ul class="navbar-nav" id="navbarNav">
           <li><a class="nav-link" href="{{ url_for('index') }}">Home</a></li>
-          <li><a class="nav-link" href="{{ url_for('register') }}">Daftar</a></li>
-          <li><a class="nav-link" href="{{ url_for('login') }}">Login</a></li>
-          <li><a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a></li>
+          
+          {% if session.get('user_id') %}
+            <li><a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a></li>
+            
+            {% if session.get('user_role') == 'administrator' %}
+              <li><a class="nav-link admin" href="{{ url_for('admin_dashboard') }}">👑 Admin</a></li>
+            {% endif %}
+            
+            <li><a class="nav-link" href="{{ url_for('logout') }}">Logout</a></li>
+          {% else %}
+            <li><a class="nav-link" href="{{ url_for('register') }}">Daftar</a></li>
+            <li><a class="nav-link" href="{{ url_for('login') }}">Login</a></li>
+          {% endif %}
         </ul>
       </div>
     </nav>
