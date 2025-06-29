@@ -22,6 +22,7 @@ Flask-Limiter==3.12
 Flask-Login==0.6.3
 Flask-Migrate==4.1.0
 Flask-MySQL==1.6.0
+Flask-Principal==0.4.0
 Flask-SQLAlchemy==3.1.1
 Flask-Static-Digest==0.4.1
 Flask-WTF==1.2.2
@@ -40,6 +41,7 @@ marshmallow==4.0.0
 mdurl==0.1.2
 mysql-connector-python==9.3.0
 numpy==2.3.0
+nvidia-nccl-cu12==2.27.3
 ordered-set==4.1.0
 packaging==25.0
 psycopg2-binary==2.9.10
