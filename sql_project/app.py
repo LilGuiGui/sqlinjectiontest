@@ -2,44 +2,90 @@ from config import sqlconfig, get_db_connection
 from form import RegistrationForm, LoginForm 
 
 import joblib
-#   •	Used for XGboost Fishnet.
+#   •   Used for XGboost Fishnet.
 import bcrypt
-# 	•	Used for hashing passwords securely.
+#   •   Used for hashing passwords securely.
 import mysql.connector
 # Connects the application to a MySQL database.
-from flask import Flask, flash, redirect, render_template, request, session, url_for
+from flask import Flask, flash, redirect, render_template, request, session, url_for, jsonify
 """ 
-	.   Flask: Initializes the Flask application.
-	•	flash: Displays one-time messages to the user.
-	•	redirect: Redirects the user to a different route.
-	•	render_template: Renders HTML templates.
-	•	request: Handles incoming request data (e.g., form submissions).
-	•	session: Maintains session data for logged-in users.
-	•	url_for: Generates URLs dynamically for routes.
+    .   Flask: Initializes the Flask application.
+    •   flash: Displays one-time messages to the user.
+    •   redirect: Redirects the user to a different route.
+    •   render_template: Renders HTML templates.
+    •   request: Handles incoming request data (e.g., form submissions).
+    •   session: Maintains session data for logged-in users.
+    •   url_for: Generates URLs dynamically for routes.
 
+"""
+from flask_principal import Principal, Permission, RoleNeed, identity_changed, Identity, AnonymousIdentity, identity_loaded, UserNeed
+"""
+    •   ADDED ON V2, Role Implementation in which DEFAULT is always user (handled by SQLDefault), and administrator role is modified SOLELY 
+        by SQL Commands, Flask or any SHOULD NOT modify or handle agent role, basically, paranoid of attacks that alleviate Role through Client
+    •   Principal: Handles User Role
+        admin : has the right to View, Delete, but never edit, that is against integrity of a Data (CIA TRIAD)
+        users : NPC ahh 
 """
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+
 # Initialize the Flask application instance
 app = Flask(__name__)
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=["200 per day", "50 per hour"],
+    default_limits=["20000 per day", "1000 per hour"],
     storage_uri="memory://",
 )
 
 sqlconfig(app)
 
+# copied from pythonhoster.org
+principal = Principal(app)
+admin_permission = Permission(RoleNeed('administrator'))
+user_permission = Permission(RoleNeed('user'))
+
 vectorizer = joblib.load("extras/xgboost_sqli_vectorizer.pkl")
 model = joblib.load("extras/xgboost_sqli_model.pkl")
-
 
 def tempered_query(query):
     vec = vectorizer.transform([query])
     pred = model.predict(vec)
     return pred[0] == 1
+
+# FIX 1: Add the missing get_user_role function
+def get_user_role(user_id):
+    """Get the role of a user by their ID"""
+    connection = get_db_connection()
+    if connection:
+        cursor = connection.cursor()
+        cursor.execute("SELECT role FROM users WHERE id=%s", (user_id,))
+        result = cursor.fetchone()
+        cursor.close()
+        connection.close()
+        
+        if result:
+            return result[0]
+    return None
+
+@identity_loaded.connect_via(app)
+def on_identity_loaded(sender, identity):
+    identity.user = session.get('user_id')
     
+    if hasattr(identity, 'user') and identity.user:
+        identity.provides.add(UserNeed(identity.user))
+        
+        connection = get_db_connection()
+        if connection:
+            cursor = connection.cursor()
+            cursor.execute("SELECT role FROM users WHERE id=%s", (identity.user,))
+            user_role = cursor.fetchone()
+            cursor.close()
+            connection.close()
+            
+            if user_role and user_role[0]:
+                identity.provides.add(RoleNeed(user_role[0]))
+
 # Route for the homepage
 @app.route("/")
 def index():
@@ -47,14 +93,14 @@ def index():
 
 # Route for user registration
 @app.route("/register", methods=['GET', 'POST'])
-@limiter.limit("1/second")
+@limiter.limit("100/second")
 def register():
     
     """ 
         Handles user registration:
-	•	GET: Displays the registration form.
-	•	POST: Processes the form submission, hashes the password, and stores user data in the database.
-	•	Redirects to the login page upon success.
+    •   GET: Displays the registration form.
+    •   POST: Processes the form submission, hashes the password, and stores user data in the database.
+    •   Redirects to the login page upon success.
     """
     form = RegistrationForm()
     if form.validate_on_submit():  # Check if form submission is valid
@@ -79,7 +125,7 @@ def register():
                     "INSERT INTO users (name, email, password) VALUES (%s, %s, %s)",
                     (name, email, hashed_password)
                 )
-                connection.commit()  # Commit the transaction
+                connection.commit()  
                 cursor.close()
                 connection.close()
 
@@ -90,14 +136,14 @@ def register():
 
 # Route for user login
 @app.route("/login", methods=['GET', 'POST'])
-@limiter.limit("1/second")
+@limiter.limit("100/second")
 def login():
     """ 
-    	Handles user login:
-	•	Validates credentials against the database.
-	•	Starts a session for the user upon successful login.
-	•	Displays an error message if login fails.
-    •	Displays an error message if login fails.
+        Handles user login:
+    •   Validates credentials against the database.
+    •   Starts a session for the user upon successful login.
+    •   Displays an error message if login fails.
+    •   Displays an error message if login fails.
     """
     form = LoginForm()
     if form.validate_on_submit():  # Check if form submission is valid
@@ -160,6 +206,7 @@ def login():
                 # Check if user exists and the password matches
                 if user and bcrypt.checkpw(password.encode('utf-8'), user[3].encode('utf-8')):  # user[3] is the hashed password
                     session['user_id'] = user[0]  # Assuming user[0] is the user ID
+                    identity_changed.send(app, identity=Identity(user[0])) #loaded
                     return redirect(url_for('dashboard'))
                 else:
                     flash("Login failed. Please check your email and password", "danger")
@@ -168,24 +215,24 @@ def login():
 
 # Route for the user dashboard
 @app.route("/dashboard")
+
+# After a bit of Research, apparently this decorator and Func below effectibely provide added negligible security
+# value but im a paranoid and dumb asl, Principal is Deprecated.
 def dashboard():
     """ 
-        Displays the dashboard for logged-in users.
-	•	Redirects to the login page if no user session exists.
+        Workflow:
+        1. Displays the dashboard for logged-in regular users only.
+        2. Admins are redirected to their own dashboard.
     """
     if 'user_id' in session:  # Check if user is logged in
         user_id = session['user_id']
+        
+        user_role = get_user_role(user_id)
+        if user_role == 'administrator':
+            return redirect(url_for('admin_dashboard'))
 
-        # Retrieve user data from the database
         connection = get_db_connection()
         if connection:
-            """ 
-            Summary of Workflow
-	        1.	Create a cursor to execute database commands.
-	        2.	Use a parameterized SQL query to safely retrieve a user by their email.
-	        3.	Fetch the user's data (if it exists) as a tuple.
-	        4.	Close the cursor and connection to release resources.
-            """
             cursor = connection.cursor()
             cursor.execute("SELECT * FROM users WHERE id=%s", (user_id,))
             user = cursor.fetchone()
@@ -195,8 +242,68 @@ def dashboard():
             if user:
                 return render_template('dashboard.html', user=user)
 
-    # Redirect to login if user is not authenticated
     return redirect(url_for('login'))
+
+@app.route("/admin-dashboard")
+@admin_permission.require()
+def admin_dashboard():
+    if 'user_id' in session:
+        user_id = session['user_id']
+        
+        connection = get_db_connection()
+        if connection:
+            cursor = connection.cursor()
+            
+            cursor.execute("SELECT * FROM users WHERE id=%s", (user_id,))
+            admin_user = cursor.fetchone()
+            
+            cursor.execute("SELECT id, name, email, role, created_at FROM users ORDER BY created_at DESC")
+            all_users = cursor.fetchall()
+            
+            cursor.close()
+            connection.close()
+            
+            if admin_user:
+                return render_template('admin_dashboard.html', 
+                                     user=admin_user, 
+                                     users=all_users)
+    
+    return redirect(url_for('login'))
+
+@app.route("/admin/delete_user/<int:user_id>", methods=['POST'])
+@admin_permission.require(http_exception=403)
+def delete_user(user_id):
+    if user_id == session.get('user_id'):
+        flash("You Cannot Delete Your Own Account","danger")
+        return redirect(url_for('admin_dashboard'))  
+    else:
+        connection = get_db_connection()
+        if connection:
+            cursor = connection.cursor()
+            
+            cursor.execute("SELECT name FROM users WHERE id=%s", (user_id,))
+            user_to_delete = cursor.fetchone()
+            
+            if user_to_delete:
+                cursor.execute("DELETE FROM users WHERE id=%s", (user_id,))
+                connection.commit()
+                affected_rows = cursor.rowcount
+                
+                cursor.close()
+                connection.close()
+                
+                if affected_rows > 0:
+                    flash(f"User '{user_to_delete[0]}' has been deleted successfully.", "success")
+                else:
+                    flash(f"ERROR! User '{user_to_delete[0]}' was not deleted!", "danger") 
+            else:
+                cursor.close()
+                connection.close()
+                flash("ERROR! User not found", "danger") 
+        else:
+            flash("Database connection failed", "danger")  
+        
+        return redirect(url_for('admin_dashboard'))  
 
 # Route for user logout
 @app.route('/logout')
@@ -204,9 +311,11 @@ def logout():
     # Logs out the user by clearing the session and redirects to the login page.
     # Remove user from session
     session.pop('user_id', None)
+    identity_changed.send(app, identity=AnonymousIdentity())
     flash("You have been logged out successfully.", "success")
     return redirect(url_for('login'))
 
 # Run the Flask application
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0",port=5000,debug=True)
+    print(app.url_map)
