@@ -1,7 +1,7 @@
-MySQL
+MySQL/MariaDB
 
-root
-awingisnotreal
+localadmin
+awingisreal
 
 admin % DB ADMIN
 ajigaming
